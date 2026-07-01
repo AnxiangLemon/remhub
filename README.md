@@ -48,7 +48,7 @@ cargo run
 
 | Method | Example |
 | --- | --- |
-| Default | `./servers.toml` in the current directory |
+| Default | `servers.toml` next to `remhub.exe`; falls back to `./servers.toml` in the current directory when developing with `cargo run` |
 | Argument | `remhub.exe D:\configs\servers.toml` |
 | Environment | `$env:REMHUB_CONFIG="D:\configs\servers.toml"` |
 

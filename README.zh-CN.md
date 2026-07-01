@@ -48,7 +48,7 @@ cargo run
 
 | 方式 | 示例 |
 | --- | --- |
-| 默认 | 当前目录下的 `./servers.toml` |
+| 默认 | `remhub.exe` 同目录下的 `servers.toml`；`cargo run` 开发时回退到当前目录的 `./servers.toml` |
 | 命令行参数 | `remhub.exe D:\configs\servers.toml` |
 | 环境变量 | `$env:REMHUB_CONFIG="D:\configs\servers.toml"` |
 

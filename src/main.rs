@@ -1510,6 +1510,12 @@ fn endpoint_for_protocol(server: &Server, protocol: Protocol) -> String {
     }
 }
 
+fn exe_dir() -> Option<PathBuf> {
+    env::current_exe()
+        .ok()
+        .and_then(|path| path.parent().map(Path::to_path_buf))
+}
+
 fn resolve_config_path() -> PathBuf {
     if let Some(path) = env::args().nth(1) {
         return PathBuf::from(path);
@@ -1517,9 +1523,36 @@ fn resolve_config_path() -> PathBuf {
     if let Ok(path) = env::var("REMHUB_CONFIG") {
         return PathBuf::from(path);
     }
-    env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(DEFAULT_CONFIG_FILE)
+
+    let mut candidates = Vec::new();
+    if let Some(dir) = exe_dir() {
+        candidates.push(dir.join(DEFAULT_CONFIG_FILE));
+    }
+    if let Ok(cwd) = env::current_dir() {
+        let in_cwd = cwd.join(DEFAULT_CONFIG_FILE);
+        if !candidates.contains(&in_cwd) {
+            candidates.push(in_cwd);
+        }
+    }
+
+    for path in &candidates {
+        if path.exists() {
+            return path.clone();
+        }
+    }
+
+    default_config_path()
+}
+
+fn default_config_path() -> PathBuf {
+    if let Ok(cwd) = env::current_dir() {
+        if cwd.join("Cargo.toml").exists() {
+            return cwd.join(DEFAULT_CONFIG_FILE);
+        }
+    }
+    exe_dir()
+        .map(|dir| dir.join(DEFAULT_CONFIG_FILE))
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_CONFIG_FILE))
 }
 
 fn load_config(path: &Path) -> Result<Config> {
