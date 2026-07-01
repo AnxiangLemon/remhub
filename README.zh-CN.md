@@ -6,6 +6,10 @@
 
 `remhub`（Remote Hub）是一个用 Rust 编写的远程服务器启动器。通过 TUI 管理 `servers.toml` 中的服务器列表，一键连接 Windows 远程桌面（RDP）或 SSH 会话。
 
+## 界面预览
+
+![remhub TUI](img/main.png)
+
 ## 功能特性
 
 - **RDP** — 自动写入 Windows 凭据（`cmdkey`），调用 `mstsc`；也支持直接打开 `.rdp` 文件

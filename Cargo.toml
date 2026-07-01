@@ -19,3 +19,14 @@ unicode-width = "0.2"
 # Avoid incremental-cache hard-link warnings on network / non-Unix file systems.
 [profile.dev]
 incremental = false
+
+# Smallest release binary: slower compile, faster/smaller output.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.release.package."*"]
+opt-level = "z"

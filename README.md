@@ -6,6 +6,10 @@
 
 `remhub` (Remote Hub) is a Rust-based remote server launcher. Manage your server list in `servers.toml` through a TUI and connect to Windows Remote Desktop (RDP) or SSH sessions with one keystroke.
 
+## Screenshot
+
+![remhub TUI](img/main.png)
+
 ## Features
 
 - **RDP** — Automatically stores Windows credentials via `cmdkey` and launches `mstsc`; also supports opening `.rdp` files directly
