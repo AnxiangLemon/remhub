@@ -3,7 +3,7 @@ use std::{
     env, fs, io,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result};
@@ -19,18 +19,18 @@ use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{
-        Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Scrollbar,
-        ScrollbarOrientation, ScrollbarState, Table, TableState, Wrap,
+        Block, BorderType, Borders, Cell, Clear, Paragraph, Row, Scrollbar, ScrollbarOrientation,
+        ScrollbarState, Table, TableState, Wrap,
     },
 };
 use serde::{Deserialize, Serialize};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const APP_NAME: &str = "remhub";
-const APP_TITLE: &str = "RDP & SSH Launcher";
+const APP_TITLE: &str = "RDP 与 SSH 启动器";
 const DEFAULT_CONFIG_FILE: &str = "servers.toml";
 const MAX_RECENT: usize = 5;
-const UNGROUPED_LABEL: &str = "(default)";
+const UNGROUPED_LABEL: &str = "未分组";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 struct Config {
@@ -50,7 +50,7 @@ struct Defaults {
     rdp_extra_args: Vec<String>,
     #[serde(default)]
     ssh_extra_args: Vec<String>,
-    /// When true, SSH sessions open in a new terminal window instead of taking over this one.
+    /// 为 true 时，SSH 会话会在新终端窗口中打开。
     #[serde(default = "default_ssh_new_window")]
     ssh_new_window: bool,
 }
@@ -98,12 +98,56 @@ enum Mode {
     Browse,
     Search,
     Help,
+    Add,
+    DeleteConfirm,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct RecentStore {
     #[serde(default)]
     by_config: HashMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AddField {
+    Name,
+    Host,
+    Protocol,
+    Port,
+    User,
+    Password,
+    Group,
+    ExpiresAt,
+    Tags,
+    Note,
+}
+
+const ADD_FIELDS: &[AddField] = &[
+    AddField::Name,
+    AddField::Host,
+    AddField::Protocol,
+    AddField::Port,
+    AddField::User,
+    AddField::Password,
+    AddField::Group,
+    AddField::ExpiresAt,
+    AddField::Tags,
+    AddField::Note,
+];
+
+#[derive(Debug, Clone)]
+struct AddForm {
+    active: usize,
+    name: String,
+    host: String,
+    protocol: String,
+    port: String,
+    user: String,
+    password: String,
+    group: String,
+    expires_at: String,
+    tags: String,
+    note: String,
 }
 
 #[derive(Debug)]
@@ -123,6 +167,8 @@ struct App {
     filtered_rdp: usize,
     filtered_ssh: usize,
     mode: Mode,
+    add_form: AddForm,
+    pending_delete_index: Option<usize>,
     message: String,
     ignore_enter_until: Instant,
     should_quit: bool,
@@ -137,6 +183,147 @@ impl Default for Defaults {
             ssh_extra_args: Vec::new(),
             ssh_new_window: default_ssh_new_window(),
         }
+    }
+}
+
+impl Default for AddForm {
+    fn default() -> Self {
+        Self {
+            active: 0,
+            name: String::new(),
+            host: String::new(),
+            protocol: "rdp".to_string(),
+            port: String::new(),
+            user: String::new(),
+            password: String::new(),
+            group: String::new(),
+            expires_at: String::new(),
+            tags: String::new(),
+            note: String::new(),
+        }
+    }
+}
+
+impl AddField {
+    fn label(self) -> &'static str {
+        match self {
+            AddField::Name => "名称",
+            AddField::Host => "主机",
+            AddField::Protocol => "协议",
+            AddField::Port => "端口",
+            AddField::User => "用户",
+            AddField::Password => "密码",
+            AddField::Group => "分组",
+            AddField::ExpiresAt => "过期日期",
+            AddField::Tags => "标签",
+            AddField::Note => "备注",
+        }
+    }
+
+    fn hint(self) -> &'static str {
+        match self {
+            AddField::Name => "必填，例如 Windows Jumpbox",
+            AddField::Host => "必填，例如 10.0.0.10",
+            AddField::Protocol => "rdp 或 ssh，按空格切换",
+            AddField::Port => "可选，例如 3389 或 22",
+            AddField::User => "可选，SSH 会生成 user@host",
+            AddField::Password => "可选，仅 RDP 会保存到 cmdkey",
+            AddField::Group => "可选，用于筛选",
+            AddField::ExpiresAt => "可选，格式 YYYY-MM-DD",
+            AddField::Tags => "可选，用英文逗号分隔",
+            AddField::Note => "可选，显示在详情面板",
+        }
+    }
+}
+
+impl AddForm {
+    fn active_field(&self) -> AddField {
+        ADD_FIELDS[self.active]
+    }
+
+    fn value(&self, field: AddField) -> &str {
+        match field {
+            AddField::Name => &self.name,
+            AddField::Host => &self.host,
+            AddField::Protocol => &self.protocol,
+            AddField::Port => &self.port,
+            AddField::User => &self.user,
+            AddField::Password => &self.password,
+            AddField::Group => &self.group,
+            AddField::ExpiresAt => &self.expires_at,
+            AddField::Tags => &self.tags,
+            AddField::Note => &self.note,
+        }
+    }
+
+    fn value_mut(&mut self, field: AddField) -> &mut String {
+        match field {
+            AddField::Name => &mut self.name,
+            AddField::Host => &mut self.host,
+            AddField::Protocol => &mut self.protocol,
+            AddField::Port => &mut self.port,
+            AddField::User => &mut self.user,
+            AddField::Password => &mut self.password,
+            AddField::Group => &mut self.group,
+            AddField::ExpiresAt => &mut self.expires_at,
+            AddField::Tags => &mut self.tags,
+            AddField::Note => &mut self.note,
+        }
+    }
+
+    fn move_next(&mut self) {
+        self.active = (self.active + 1).min(ADD_FIELDS.len() - 1);
+    }
+
+    fn move_previous(&mut self) {
+        self.active = self.active.saturating_sub(1);
+    }
+
+    fn is_last_field(&self) -> bool {
+        self.active + 1 == ADD_FIELDS.len()
+    }
+
+    fn toggle_protocol(&mut self) {
+        self.protocol = match parse_protocol(&self.protocol) {
+            Some(Protocol::Rdp) => "ssh".to_string(),
+            _ => "rdp".to_string(),
+        };
+    }
+
+    fn to_server(&self) -> std::result::Result<Server, String> {
+        let name = self.name.trim();
+        if name.is_empty() {
+            return Err("名称不能为空。".to_string());
+        }
+        let host = self.host.trim();
+        if host.is_empty() {
+            return Err("主机不能为空。".to_string());
+        }
+        if self.expires_at.trim().chars().any(|ch| ch.is_whitespace()) {
+            return Err("过期日期不能包含空格。".to_string());
+        }
+
+        let protocol = parse_protocol(&self.protocol)
+            .ok_or_else(|| "协议只能填写 rdp 或 ssh。".to_string())?;
+        let port = parse_optional_port(&self.port)?;
+        let tags = split_tags(&self.tags);
+
+        Ok(Server {
+            name: name.to_string(),
+            host: host.to_string(),
+            group: self.group.trim().to_string(),
+            protocol,
+            port,
+            user: optional_string(&self.user),
+            password: optional_string(&self.password),
+            private_key: None,
+            private_key_path: None,
+            domain: None,
+            expires_at: optional_string(&self.expires_at),
+            note: optional_string(&self.note),
+            rdp_file: None,
+            tags,
+        })
     }
 }
 
@@ -220,8 +407,7 @@ impl App {
     fn new(config: Config, config_path: PathBuf) -> Self {
         let config_key = config_path.to_string_lossy().into_owned();
         let recent_store_path = recent_store_path();
-        let recent_names =
-            load_recent_names(&recent_store_path, &config_key).unwrap_or_default();
+        let recent_names = load_recent_names(&recent_store_path, &config_key).unwrap_or_default();
         let recent_set: HashSet<String> = recent_names.iter().cloned().collect();
         let groups = collect_groups(&config.servers);
         let today_iso = today_iso_date().unwrap_or_default();
@@ -241,13 +427,15 @@ impl App {
             filtered_rdp: 0,
             filtered_ssh: 0,
             mode: Mode::Browse,
+            add_form: AddForm::default(),
+            pending_delete_index: None,
             message: String::new(),
             ignore_enter_until: Instant::now() + Duration::from_millis(700),
             should_quit: false,
         };
         app.refresh_filter();
         app.message = format!(
-            "Loaded {} server(s). Press h for help.",
+            "已加载 {} 台服务器。按 h 查看帮助。",
             app.config.servers.len()
         );
         app
@@ -277,15 +465,15 @@ impl App {
         };
         self.refresh_filter();
         self.message = match &self.group_filter {
-            Some(group) => format!("Group filter: {group}"),
-            None => "Group filter: all".to_string(),
+            Some(group) => format!("分组筛选：{group}"),
+            None => "分组筛选：全部".to_string(),
         };
     }
 
     fn group_filter_label(&self) -> String {
         match &self.group_filter {
             Some(group) => group.clone(),
-            None => "all".to_string(),
+            None => "全部".to_string(),
         }
     }
 
@@ -299,7 +487,7 @@ impl App {
             &self.config_key,
             &self.recent_names,
         ) {
-            self.message = format!("Could not save recent list: {err:#}");
+            self.message = format!("无法保存最近连接列表：{err:#}");
         }
         self.refresh_filter();
     }
@@ -319,17 +507,7 @@ impl App {
                 if !matches_group_filter(server, self.group_filter.as_deref()) {
                     return None;
                 }
-                let haystack = format!(
-                    "{} {} {} {} {} {}",
-                    server.name,
-                    server.host,
-                    server.group,
-                    server.protocol.label(),
-                    server_expires_at(server).unwrap_or_default(),
-                    server.tags.join(" ")
-                )
-                .to_lowercase();
-                (needle.is_empty() || haystack.contains(&needle)).then_some(idx)
+                server_matches_search(server, &needle).then_some(idx)
             })
             .collect();
 
@@ -399,21 +577,133 @@ impl App {
                 self.config = config;
                 self.rebuild_groups();
                 self.refresh_filter();
-                self.message = format!("Reloaded {}", self.config_path.display());
+                self.message = format!("已重新加载 {}", self.config_path.display());
             }
-            Err(err) => self.message = format!("Reload failed: {err:#}"),
+            Err(err) => self.message = format!("重新加载失败：{err:#}"),
         }
     }
 
     fn copy_selected_command(&mut self) {
         let Some(server) = self.selected_server().cloned() else {
-            self.message = "No server selected.".to_string();
+            self.message = "未选择服务器。".to_string();
             return;
         };
         let command = connection_string(&server, &self.config.defaults);
         match copy_to_clipboard(&command) {
-            Ok(()) => self.message = format!("Copied: {command}"),
-            Err(err) => self.message = format!("Copy failed: {err:#}"),
+            Ok(()) => self.message = format!("已复制：{command}"),
+            Err(err) => self.message = format!("复制失败：{err:#}"),
+        }
+    }
+
+    fn start_add_server(&mut self) {
+        self.add_form = AddForm::default();
+        self.mode = Mode::Add;
+        self.message = "正在新增服务器。Enter/Tab 下一项，Esc 取消。".to_string();
+    }
+
+    fn save_add_form(&mut self) {
+        match self.add_form.to_server() {
+            Ok(server) => {
+                let server_name = server.name.clone();
+                if self
+                    .config
+                    .servers
+                    .iter()
+                    .any(|server| server.name == server_name)
+                {
+                    self.message = format!("服务器名称已存在：{server_name}");
+                    return;
+                }
+                let new_idx = self.config.servers.len();
+                self.config.servers.push(server);
+                self.rebuild_groups();
+                self.search.clear();
+                self.group_filter = None;
+                self.refresh_filter();
+                self.selected = self
+                    .filtered
+                    .iter()
+                    .position(|visible| *visible == new_idx)
+                    .unwrap_or_else(|| self.filtered.len().saturating_sub(1));
+
+                match save_config(&self.config_path, &self.config) {
+                    Ok(()) => {
+                        self.mode = Mode::Browse;
+                        self.message = format!("已添加服务器：{server_name}");
+                    }
+                    Err(err) => {
+                        let _ = self.config.servers.pop();
+                        self.rebuild_groups();
+                        self.refresh_filter();
+                        self.message = format!("保存新增服务器失败：{err:#}");
+                    }
+                }
+            }
+            Err(err) => self.message = err,
+        }
+    }
+
+    fn request_delete_selected(&mut self) {
+        let Some(idx) = self.filtered.get(self.selected).copied() else {
+            self.message = "未选择服务器。".to_string();
+            return;
+        };
+        let Some(server) = self.config.servers.get(idx) else {
+            self.message = "未选择服务器。".to_string();
+            return;
+        };
+        self.pending_delete_index = Some(idx);
+        self.mode = Mode::DeleteConfirm;
+        self.message = format!("确认删除 {}？按 y 删除，按 n 或 Esc 取消。", server.name);
+    }
+
+    fn cancel_delete(&mut self) {
+        self.pending_delete_index = None;
+        self.mode = Mode::Browse;
+        self.message = "已取消删除。".to_string();
+    }
+
+    fn confirm_delete(&mut self) {
+        let Some(idx) = self.pending_delete_index.take() else {
+            self.mode = Mode::Browse;
+            self.message = "没有待删除的服务器。".to_string();
+            return;
+        };
+        if idx >= self.config.servers.len() {
+            self.mode = Mode::Browse;
+            self.message = "待删除服务器不存在。".to_string();
+            return;
+        }
+
+        let removed = self.config.servers.remove(idx);
+        let old_recent_names = self.recent_names.clone();
+        self.recent_names.retain(|name| name != &removed.name);
+        self.recent_set = self.recent_names.iter().cloned().collect();
+        self.rebuild_groups();
+        self.refresh_filter();
+
+        match save_config(&self.config_path, &self.config) {
+            Ok(()) => {
+                if let Err(err) = save_recent_names(
+                    &self.recent_store_path,
+                    &self.config_key,
+                    &self.recent_names,
+                ) {
+                    self.message = format!("已删除 {}，但最近连接保存失败：{err:#}", removed.name);
+                } else {
+                    self.message = format!("已删除服务器：{}", removed.name);
+                }
+                self.mode = Mode::Browse;
+            }
+            Err(err) => {
+                self.config.servers.insert(idx, removed);
+                self.recent_names = old_recent_names;
+                self.recent_set = self.recent_names.iter().cloned().collect();
+                self.rebuild_groups();
+                self.refresh_filter();
+                self.mode = Mode::Browse;
+                self.message = format!("删除失败：{err:#}");
+            }
         }
     }
 }
@@ -432,6 +722,39 @@ impl Protocol {
             Protocol::Ssh => Color::Green,
         }
     }
+}
+
+fn parse_protocol(value: &str) -> Option<Protocol> {
+    match value.trim().to_lowercase().as_str() {
+        "rdp" => Some(Protocol::Rdp),
+        "ssh" => Some(Protocol::Ssh),
+        _ => None,
+    }
+}
+
+fn parse_optional_port(value: &str) -> std::result::Result<Option<u16>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    value
+        .parse::<u16>()
+        .map(Some)
+        .map_err(|_| "端口必须是 1-65535 之间的数字。".to_string())
+}
+
+fn optional_string(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+fn split_tags(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(ToString::to_string)
+        .collect()
 }
 
 fn handle_key(
@@ -454,6 +777,8 @@ fn handle_key(
             app.mode = Mode::Browse;
             Ok(())
         }
+        Mode::Add => handle_add_key(app, key),
+        Mode::DeleteConfirm => handle_delete_confirm_key(app, key),
         Mode::Browse => handle_browse_key(terminal, app, key),
     }
 }
@@ -468,19 +793,19 @@ fn handle_browse_key(
         KeyCode::Char('h') | KeyCode::Char('?') => app.mode = Mode::Help,
         KeyCode::Char('/') => {
             app.mode = Mode::Search;
-            app.message = "Type to filter servers. Enter confirms, Esc clears focus.".to_string();
+            app.message = "输入关键字筛选服务器。Enter 确认，Esc 返回。".to_string();
         }
         KeyCode::Char('r') => app.reload(),
         KeyCode::Char('g') => app.cycle_group_filter(),
         KeyCode::Char('c') => app.copy_selected_command(),
-        KeyCode::Char(c @ '1'..='9') => {
-            launch_at(terminal, app, (c as u8 - b'1') as usize)?
-        }
+        KeyCode::Char('a') => app.start_add_server(),
+        KeyCode::Char('d') | KeyCode::Delete => app.request_delete_selected(),
+        KeyCode::Char(c @ '1'..='9') => launch_at(terminal, app, (c as u8 - b'1') as usize)?,
         KeyCode::Enter if Instant::now() >= app.ignore_enter_until => {
             launch_selected(terminal, app)?
         }
         KeyCode::Enter => {
-            app.message = "Ready. Press Enter again to connect.".to_string();
+            app.message = "已就绪。再次按 Enter 连接。".to_string();
         }
         KeyCode::Down | KeyCode::Char('j') => app.move_down(),
         KeyCode::Up | KeyCode::Char('k') => app.move_up(),
@@ -494,13 +819,61 @@ fn handle_browse_key(
     Ok(())
 }
 
+fn handle_add_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => {
+            app.mode = Mode::Browse;
+            app.message = "已取消新增。".to_string();
+        }
+        KeyCode::Enter => {
+            if app.add_form.is_last_field() {
+                app.save_add_form();
+            } else {
+                app.add_form.move_next();
+            }
+        }
+        KeyCode::Tab | KeyCode::Down => app.add_form.move_next(),
+        KeyCode::BackTab | KeyCode::Up => app.add_form.move_previous(),
+        KeyCode::Backspace => {
+            if app.add_form.active_field() != AddField::Protocol {
+                let field = app.add_form.active_field();
+                app.add_form.value_mut(field).pop();
+            }
+        }
+        KeyCode::Char(' ') if app.add_form.active_field() == AddField::Protocol => {
+            app.add_form.toggle_protocol();
+        }
+        KeyCode::Char(ch) => {
+            let field = app.add_form.active_field();
+            if field == AddField::Protocol {
+                app.add_form.protocol.push(ch);
+            } else {
+                app.add_form.value_mut(field).push(ch);
+            }
+        }
+        _ => {}
+    }
+
+    Ok(())
+}
+
+fn handle_delete_confirm_key(app: &mut App, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => app.confirm_delete(),
+        KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => app.cancel_delete(),
+        _ => {}
+    }
+
+    Ok(())
+}
+
 fn launch_at(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     app: &mut App,
     visible_index: usize,
 ) -> Result<()> {
     if visible_index >= app.filtered.len() {
-        app.message = format!("No server at shortcut {}.", visible_index + 1);
+        app.message = format!("快捷键 {} 没有对应服务器。", visible_index + 1);
         return Ok(());
     }
     app.selected = visible_index;
@@ -512,7 +885,7 @@ fn launch_selected(
     app: &mut App,
 ) -> Result<()> {
     let Some(server) = app.selected_server().cloned() else {
-        app.message = "No server selected.".to_string();
+        app.message = "未选择服务器。".to_string();
         return Ok(());
     };
 
@@ -521,7 +894,7 @@ fn launch_selected(
             app.record_recent(&server.name);
             app.message = summary;
         }
-        Err(err) => app.message = format!("Launch failed: {err:#}"),
+        Err(err) => app.message = format!("启动失败：{err:#}"),
     }
 
     Ok(())
@@ -531,7 +904,7 @@ fn handle_search_key(app: &mut App, key: KeyEvent) -> Result<()> {
     match key.code {
         KeyCode::Esc => {
             app.mode = Mode::Browse;
-            app.message = "Search kept. Press / to edit or Backspace to clear text.".to_string();
+            app.message = "已保留搜索条件。按 / 继续编辑，按 Backspace 删除文本。".to_string();
         }
         KeyCode::Enter => app.mode = Mode::Browse,
         KeyCode::Backspace => {
@@ -567,6 +940,8 @@ fn draw(frame: &mut Frame, app: &App) {
 
     match app.mode {
         Mode::Help => draw_help(frame, centered_rect(72, 68, area)),
+        Mode::Add => draw_add_form(frame, app, centered_rect(76, 78, area)),
+        Mode::DeleteConfirm => draw_delete_confirm(frame, app, centered_rect(58, 24, area)),
         _ => {}
     }
 }
@@ -581,7 +956,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     ]);
     let config_label = truncate_config_path(&app.config_path, 28);
     let right = format!(
-        "{} shown · {} RDP · {} SSH · group:{}  |  {}",
+        "显示 {} · RDP {} · SSH {} · 分组：{}  |  {}",
         app.filtered.len(),
         app.filtered_rdp,
         app.filtered_ssh,
@@ -593,7 +968,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         .direction(Direction::Horizontal)
         .constraints([
             Constraint::Min(20),
-            Constraint::Length(right.len() as u16 + 2),
+            Constraint::Length((UnicodeWidthStr::width(right.as_str()) + 2) as u16),
         ])
         .split(area);
 
@@ -631,11 +1006,11 @@ fn draw_server_list(frame: &mut Frame, app: &App, area: Rect) {
 
     let header = Row::new(vec![
         Cell::from("#").style(column_header_style()),
-        Cell::from("Type").style(column_header_style()),
-        Cell::from("Name").style(column_header_style()),
-        Cell::from("Address").style(column_header_style()),
-        Cell::from("Expires").style(column_header_style()),
-        Cell::from("Group").style(column_header_style()),
+        Cell::from("类型").style(column_header_style()),
+        Cell::from("名称").style(column_header_style()),
+        Cell::from("地址").style(column_header_style()),
+        Cell::from("过期").style(column_header_style()),
+        Cell::from("分组").style(column_header_style()),
     ])
     .height(1)
     .bottom_margin(1);
@@ -710,7 +1085,7 @@ fn draw_server_list(frame: &mut Frame, app: &App, area: Rect) {
         .block(
             Block::default()
                 .title(format!(
-                    " Servers ({}/{}) ",
+                    " 服务器 ({}/{}) ",
                     app.filtered.len(),
                     app.config.servers.len()
                 ))
@@ -767,49 +1142,49 @@ fn draw_side_panel(frame: &mut Frame, app: &App, area: Rect) {
                 ),
             ]),
             Line::raw(""),
-            Line::raw(format!("Host     : {}", server.host)),
+            Line::raw(format!("主机     : {}", server.host)),
             Line::raw(format!(
-                "Port     : {}",
+                "端口     : {}",
                 server
                     .port
                     .map(|port| port.to_string())
                     .unwrap_or_else(|| "-".to_string())
             )),
             Line::raw(format!(
-                "User     : {}",
+                "用户     : {}",
                 server.user.as_deref().unwrap_or("-")
             )),
             Line::raw(format!(
-                "Expires  : {}",
+                "过期     : {}",
                 server_expires_at(server).unwrap_or_else(|| "-".to_string())
             )),
             Line::raw(format!(
-                "Password : {}",
+                "密码     : {}",
                 if has_text(server.password.as_deref()) {
-                    "saved"
+                    "已保存"
                 } else {
                     "-"
                 }
             )),
             Line::raw(format!(
-                "SSH key  : {}",
+                "SSH 密钥 : {}",
                 if server.private_key_path.is_some() || has_text(server.private_key.as_deref()) {
-                    "saved"
+                    "已保存"
                 } else {
                     "-"
                 }
             )),
-            Line::raw(format!("Group    : {}", group_label(&server.group))),
+            Line::raw(format!("分组     : {}", group_label(&server.group))),
             Line::raw(format!(
-                "Recent   : {}",
-                if app.is_recent(server) { "yes" } else { "no" }
+                "最近     : {}",
+                if app.is_recent(server) { "是" } else { "否" }
             )),
             Line::raw(format!(
-                "Command  : {}",
+                "命令     : {}",
                 truncate_visual(&connection_string(server, &app.config.defaults), 42)
             )),
             Line::raw(format!(
-                "Tags     : {}",
+                "标签     : {}",
                 if server.tags.is_empty() {
                     "-".to_string()
                 } else {
@@ -817,16 +1192,16 @@ fn draw_side_panel(frame: &mut Frame, app: &App, area: Rect) {
                 }
             )),
             Line::raw(""),
-            Line::raw(server.note.as_deref().unwrap_or("No note.")),
+            Line::raw(server.note.as_deref().unwrap_or("暂无备注。")),
         ]
     } else {
-        vec![Line::raw("No matching server.")]
+        vec![Line::raw("没有匹配的服务器。")]
     };
 
     frame.render_widget(
         Paragraph::new(lines).wrap(Wrap { trim: true }).block(
             Block::default()
-                .title(" Details ")
+                .title(" 详情 ")
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::DarkGray)),
@@ -842,7 +1217,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         Style::default().fg(Color::Yellow)
     };
     let search = if app.search.is_empty() {
-        "/ filter".to_string()
+        "/ 筛选".to_string()
     } else {
         format!("/ {}", app.search)
     };
@@ -859,17 +1234,24 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
             " Enter ",
             Style::default().fg(Color::Black).bg(Color::Green),
         ),
-        Span::raw(" connect  "),
-        Span::styled(" 1-9 ", Style::default().fg(Color::Black).bg(Color::Magenta)),
-        Span::raw(" quick  "),
+        Span::raw(" 连接  "),
+        Span::styled(
+            " 1-9 ",
+            Style::default().fg(Color::Black).bg(Color::Magenta),
+        ),
+        Span::raw(" 快连  "),
         Span::styled(" c ", Style::default().fg(Color::Black).bg(Color::Blue)),
-        Span::raw(" copy  "),
+        Span::raw(" 复制  "),
+        Span::styled(" a ", Style::default().fg(Color::Black).bg(Color::Green)),
+        Span::raw(" 新增  "),
+        Span::styled(" d ", Style::default().fg(Color::Black).bg(Color::Red)),
+        Span::raw(" 删除  "),
         Span::styled(format!(" {group} "), group_style),
-        Span::raw(" group  "),
+        Span::raw(" 分组  "),
         Span::styled(" h ", Style::default().fg(Color::Black).bg(Color::White)),
-        Span::raw(" help  "),
+        Span::raw(" 帮助  "),
         Span::styled(" q ", Style::default().fg(Color::Black).bg(Color::Red)),
-        Span::raw(" quit"),
+        Span::raw(" 退出"),
     ]);
 
     let chunks = Layout::default()
@@ -893,41 +1275,161 @@ fn draw_help(frame: &mut Frame, area: Rect) {
     frame.render_widget(Clear, area);
     let help = vec![
         Line::styled(
-            format!("{APP_NAME} help"),
+            format!("{APP_NAME} 帮助"),
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
         Line::raw(""),
-        Line::raw("Enter       Connect to selected server"),
-        Line::raw("1-9         Quick connect to visible servers 1 through 9"),
-        Line::raw("c           Copy connection command to clipboard"),
-        Line::raw("g           Cycle group filter (all -> group1 -> ...)"),
-        Line::raw("/           Search by name, host, group, protocol, or tags"),
-        Line::raw("h           This help panel"),
-        Line::raw("q / Esc     Quit"),
-        Line::raw("Up/Down     Move selection"),
-        Line::raw("j / k       Move selection (vim-style)"),
-        Line::raw("PageUp/Down Jump 10 rows"),
-        Line::raw("Home / End  Jump to first / last server"),
-        Line::raw("r           Reload servers.toml"),
+        Line::raw("Enter       连接选中的服务器"),
+        Line::raw("1-9         快速连接当前可见列表中的第 1-9 台"),
+        Line::raw("c           复制连接命令到剪贴板"),
+        Line::raw("a           新增服务器，保存到 servers.toml"),
+        Line::raw("d / Delete  删除选中的服务器，需要确认"),
+        Line::raw("g           循环切换分组筛选（全部 -> 分组1 -> ...）"),
+        Line::raw("/           按名称、主机、分组、协议或标签搜索"),
+        Line::raw("h           显示此帮助面板"),
+        Line::raw("q / Esc     退出"),
+        Line::raw("Up/Down     移动选中项"),
+        Line::raw("j / k       移动选中项（vim 风格）"),
+        Line::raw("PageUp/Down 跳转 10 行"),
+        Line::raw("Home / End  跳到第一台 / 最后一台服务器"),
+        Line::raw("r           重新加载 servers.toml"),
         Line::raw(""),
-        Line::raw("Recent connections (last 5) are pinned to the top on startup."),
-        Line::raw("RDP uses mstsc by default. SSH uses ssh by default."),
-        Line::raw("On Windows, SSH opens in a new terminal window by default."),
-        Line::raw("Set defaults.ssh_new_window = false to connect in this window."),
-        Line::raw("Press any key to close this panel."),
+        Line::raw("最近连接的 5 台服务器会在启动时置顶。"),
+        Line::raw("RDP 默认使用 mstsc，SSH 默认使用 ssh。"),
+        Line::raw("在 Windows 上，SSH 默认会在新终端窗口中打开。"),
+        Line::raw("设置 defaults.ssh_new_window = false 可在当前窗口连接。"),
+        Line::raw("按任意键关闭此面板。"),
     ];
     frame.render_widget(
         Paragraph::new(help).block(
             Block::default()
-                .title(" Help ")
+                .title(" 帮助 ")
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(Color::Cyan)),
         ),
         area,
     );
+}
+
+fn draw_add_form(frame: &mut Frame, app: &App, area: Rect) {
+    frame.render_widget(Clear, area);
+
+    let rows: Vec<Line> = ADD_FIELDS
+        .iter()
+        .enumerate()
+        .flat_map(|(idx, field)| {
+            let is_active = idx == app.add_form.active;
+            let label_style = if is_active {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Cyan)
+            };
+            let value_style = if is_active {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White)
+            };
+            let cursor = if is_active { "▸" } else { " " };
+            let value = display_add_field_value(&app.add_form, *field);
+            [
+                Line::from(vec![
+                    Span::styled(format!("{cursor} {:<8}", field.label()), label_style),
+                    Span::raw(" "),
+                    Span::styled(value, value_style),
+                ]),
+                Line::from(vec![
+                    Span::raw("  "),
+                    Span::styled(field.hint(), Style::default().fg(Color::DarkGray)),
+                ]),
+            ]
+        })
+        .collect();
+
+    let mut lines = Vec::with_capacity(rows.len() + 4);
+    lines.push(Line::styled(
+        "新增服务器",
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD),
+    ));
+    lines.push(Line::raw(""));
+    lines.extend(rows);
+    lines.push(Line::raw(""));
+    lines.push(Line::styled(
+        "Enter/Tab 下一项，Shift+Tab/↑ 上一项，最后一项 Enter 保存，Esc 取消。",
+        Style::default().fg(Color::Gray),
+    ));
+
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: true }).block(
+            Block::default()
+                .title(" 新增 ")
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Cyan)),
+        ),
+        area,
+    );
+}
+
+fn draw_delete_confirm(frame: &mut Frame, app: &App, area: Rect) {
+    frame.render_widget(Clear, area);
+    let server_name = app
+        .pending_delete_index
+        .and_then(|idx| app.config.servers.get(idx))
+        .map(|server| server.name.as_str())
+        .unwrap_or("-");
+    let lines = vec![
+        Line::styled(
+            "删除服务器",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+        Line::raw(""),
+        Line::raw(format!("确定要删除「{server_name}」吗？")),
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled(
+                " y / Enter ",
+                Style::default().fg(Color::Black).bg(Color::Red),
+            ),
+            Span::raw(" 删除   "),
+            Span::styled(
+                " n / Esc ",
+                Style::default().fg(Color::Black).bg(Color::White),
+            ),
+            Span::raw(" 取消"),
+        ]),
+    ];
+
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: true }).block(
+            Block::default()
+                .title(" 确认删除 ")
+                .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
+                .border_style(Style::default().fg(Color::Red)),
+        ),
+        area,
+    );
+}
+
+fn display_add_field_value(form: &AddForm, field: AddField) -> String {
+    let value = form.value(field);
+    if field == AddField::Password && !value.is_empty() {
+        "*".repeat(UnicodeWidthStr::width(value))
+    } else if value.is_empty() {
+        "-".to_string()
+    } else {
+        value.to_string()
+    }
 }
 
 fn launch_server(
@@ -962,15 +1464,15 @@ fn launch_rdp(server: &Server, defaults: &Defaults) -> Result<String> {
     command.args(&defaults.rdp_extra_args);
     command
         .spawn()
-        .with_context(|| format!("could not start {}", defaults.rdp_command))?;
+        .with_context(|| format!("无法启动 {}", defaults.rdp_command))?;
 
     let credential_note = if has_text(server.password.as_deref()) {
-        " with saved credential"
+        "（已保存凭据）"
     } else {
         ""
     };
     Ok(format!(
-        "Started RDP session for {}{}",
+        "已启动 {} 的 RDP 会话{}",
         server.name, credential_note
     ))
 }
@@ -1004,27 +1506,32 @@ fn launch_ssh_new_window(server: &Server, defaults: &Defaults) -> Result<String>
 
     let spawned = if windows_terminal_available() {
         let mut command = Command::new("wt");
-        command.arg("new-tab").arg("--title").arg(&window_title).arg("--");
+        command
+            .arg("new-tab")
+            .arg("--title")
+            .arg(&window_title)
+            .arg("--");
         command.arg(&program);
         command.args(&args);
         command
             .spawn()
-            .with_context(|| format!("could not start {} in Windows Terminal", defaults.ssh_command))
+            .with_context(|| format!("无法在 Windows Terminal 中启动 {}", defaults.ssh_command))
     } else {
         let mut command = Command::new("cmd");
-        command.arg("/C").arg("start").arg(window_title).arg(program);
+        command
+            .arg("/C")
+            .arg("start")
+            .arg(window_title)
+            .arg(program);
         command.args(args);
         command
             .spawn()
-            .with_context(|| format!("could not start {} in a new window", defaults.ssh_command))
+            .with_context(|| format!("无法在新窗口中启动 {}", defaults.ssh_command))
     };
 
     spawned?;
 
-    Ok(format!(
-        "Started SSH session for {} in a new window",
-        server.name
-    ))
+    Ok(format!("已在新窗口启动 {} 的 SSH 会话", server.name))
 }
 
 fn windows_terminal_available() -> bool {
@@ -1046,10 +1553,10 @@ fn launch_ssh_foreground(
     suspend_terminal(terminal, || {
         command
             .status()
-            .with_context(|| format!("could not start {}", defaults.ssh_command))
+            .with_context(|| format!("无法启动 {}", defaults.ssh_command))
     })?;
 
-    Ok(format!("SSH session ended for {}", server.name))
+    Ok(format!("{} 的 SSH 会话已结束", server.name))
 }
 
 fn save_rdp_credential(server: &Server) -> Result<()> {
@@ -1091,10 +1598,10 @@ fn save_cmdkey_target(target: &str, user: &str, password: &str) -> Result<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .with_context(|| format!("could not run cmdkey for {target}"))?;
+        .with_context(|| format!("无法为 {target} 运行 cmdkey"))?;
 
     if !status.success() {
-        anyhow::bail!("cmdkey failed for {target}");
+        anyhow::bail!("cmdkey 处理 {target} 失败");
     }
 
     Ok(())
@@ -1110,11 +1617,10 @@ fn materialize_inline_private_key(server: &Server) -> Result<Option<PathBuf>> {
     };
 
     let dir = env::temp_dir().join(format!("{APP_NAME}-keys"));
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("could not create key directory {}", dir.display()))?;
+    fs::create_dir_all(&dir).with_context(|| format!("无法创建密钥目录 {}", dir.display()))?;
     let path = dir.join(format!("{}.key", sanitize_file_name(&server.name)));
     fs::write(&path, private_key.replace("\\n", "\n"))
-        .with_context(|| format!("could not write SSH private key {}", path.display()))?;
+        .with_context(|| format!("无法写入 SSH 私钥 {}", path.display()))?;
     Ok(Some(path))
 }
 
@@ -1190,17 +1696,19 @@ fn column_header_style() -> Style {
 }
 
 fn message_style(message: &str) -> Style {
-    if message.starts_with("Started")
-        || message.starts_with("Loaded")
-        || message.starts_with("Copied")
-        || message.contains("Reloaded")
-        || message.starts_with("Ready.")
-        || message.starts_with("Group filter:")
+    if message.starts_with("已启动")
+        || message.starts_with("已加载")
+        || message.starts_with("已复制")
+        || message.contains("已重新加载")
+        || message.starts_with("已就绪")
+        || message.starts_with("分组筛选")
+        || message.ends_with("的 SSH 会话已结束")
     {
         Style::default().fg(Color::Green)
-    } else if message.starts_with("Launch failed")
-        || message.starts_with("Reload failed")
-        || message.starts_with("Copy failed")
+    } else if message.starts_with("启动失败")
+        || message.starts_with("重新加载失败")
+        || message.starts_with("复制失败")
+        || message.starts_with("无法")
     {
         Style::default().fg(Color::Red)
     } else {
@@ -1249,6 +1757,28 @@ fn matches_group_filter(server: &Server, group_filter: Option<&str>) -> bool {
     }
 }
 
+fn server_matches_search(server: &Server, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+
+    contains_case_insensitive(&server.name, needle)
+        || contains_case_insensitive(&server.host, needle)
+        || contains_case_insensitive(&server.group, needle)
+        || contains_case_insensitive(server.protocol.label(), needle)
+        || server_expires_at(server)
+            .as_deref()
+            .is_some_and(|expires| contains_case_insensitive(expires, needle))
+        || server
+            .tags
+            .iter()
+            .any(|tag| contains_case_insensitive(tag, needle))
+}
+
+fn contains_case_insensitive(value: &str, needle: &str) -> bool {
+    value.to_lowercase().contains(needle)
+}
+
 fn recent_store_path() -> PathBuf {
     if let Ok(local) = env::var("LOCALAPPDATA") {
         return PathBuf::from(local).join(APP_NAME).join("recent.toml");
@@ -1261,9 +1791,9 @@ fn load_recent_names(store_path: &Path, config_key: &str) -> Result<Vec<String>>
         return Ok(Vec::new());
     }
     let content = fs::read_to_string(store_path)
-        .with_context(|| format!("could not read recent file {}", store_path.display()))?;
+        .with_context(|| format!("无法读取最近连接文件 {}", store_path.display()))?;
     let store: RecentStore = toml::from_str(&content)
-        .with_context(|| format!("could not parse recent file {}", store_path.display()))?;
+        .with_context(|| format!("无法解析最近连接文件 {}", store_path.display()))?;
     Ok(store
         .by_config
         .get(config_key)
@@ -1277,7 +1807,7 @@ fn load_recent_names(store_path: &Path, config_key: &str) -> Result<Vec<String>>
 fn save_recent_names(store_path: &Path, config_key: &str, names: &[String]) -> Result<()> {
     if let Some(parent) = store_path.parent() {
         fs::create_dir_all(parent)
-            .with_context(|| format!("could not create recent directory {}", parent.display()))?;
+            .with_context(|| format!("无法创建最近连接目录 {}", parent.display()))?;
     }
 
     let mut store = if store_path.exists() {
@@ -1293,7 +1823,7 @@ fn save_recent_names(store_path: &Path, config_key: &str, names: &[String]) -> R
     );
     let content = toml::to_string_pretty(&store)?;
     fs::write(store_path, content)
-        .with_context(|| format!("could not write recent file {}", store_path.display()))?;
+        .with_context(|| format!("无法写入最近连接文件 {}", store_path.display()))?;
     Ok(())
 }
 
@@ -1340,14 +1870,14 @@ fn copy_to_clipboard(text: &str) -> Result<()> {
             .args(["/C", "clip"])
             .stdin(Stdio::piped())
             .spawn()
-            .context("could not run clip.exe")?;
+            .context("无法运行 clip.exe")?;
         child
             .stdin
             .as_mut()
-            .context("clip stdin unavailable")?
+            .context("clip 标准输入不可用")?
             .write_all(text.as_bytes())
-            .context("could not write to clip.exe")?;
-        child.wait().context("clip.exe did not exit cleanly")?;
+            .context("无法写入 clip.exe")?;
+        child.wait().context("clip.exe 未正常退出")?;
         return Ok(());
     }
 
@@ -1369,17 +1899,17 @@ fn copy_to_clipboard(text: &str) -> Result<()> {
                     .args(&args)
                     .stdin(Stdio::piped())
                     .spawn()
-                    .with_context(|| format!("could not run {program}"))?;
+                    .with_context(|| format!("无法运行 {program}"))?;
                 child
                     .stdin
                     .as_mut()
-                    .context("clipboard stdin unavailable")?
+                    .context("剪贴板工具标准输入不可用")?
                     .write_all(text.as_bytes())?;
                 child.wait()?;
                 return Ok(());
             }
         }
-        anyhow::bail!("no clipboard tool found (pbcopy, xclip, wl-copy)");
+        anyhow::bail!("未找到剪贴板工具（pbcopy、xclip、wl-copy）");
     }
 }
 
@@ -1398,19 +1928,54 @@ fn truncate_config_path(path: &Path, max_width: usize) -> String {
 }
 
 fn today_iso_date() -> Option<String> {
-    let output = Command::new("powershell")
-        .args([
-            "-NoProfile",
-            "-Command",
-            "Get-Date -Format yyyy-MM-dd",
-        ])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
+    #[cfg(windows)]
+    {
+        return windows_local_iso_date().or_else(today_utc_iso_date);
     }
-    let date = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    (date.len() == 10).then_some(date)
+
+    #[cfg(not(windows))]
+    today_utc_iso_date()
+}
+
+#[cfg(windows)]
+#[repr(C)]
+struct WindowsSystemTime {
+    year: u16,
+    month: u16,
+    day_of_week: u16,
+    day: u16,
+    hour: u16,
+    minute: u16,
+    second: u16,
+    milliseconds: u16,
+}
+
+#[cfg(windows)]
+#[link(name = "kernel32")]
+unsafe extern "system" {
+    fn GetLocalTime(system_time: *mut WindowsSystemTime);
+}
+
+#[cfg(windows)]
+fn windows_local_iso_date() -> Option<String> {
+    let mut system_time = std::mem::MaybeUninit::<WindowsSystemTime>::uninit();
+    unsafe {
+        GetLocalTime(system_time.as_mut_ptr());
+        let system_time = system_time.assume_init();
+        if system_time.year == 0 || system_time.month == 0 || system_time.day == 0 {
+            return None;
+        }
+        Some(format!(
+            "{:04}-{:02}-{:02}",
+            system_time.year, system_time.month, system_time.day
+        ))
+    }
+}
+
+fn today_utc_iso_date() -> Option<String> {
+    let days_since_epoch = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs() / 86_400;
+    let (year, month, day) = ordinal_to_date(days_since_epoch as i64);
+    Some(format!("{year:04}-{month:02}-{day:02}"))
 }
 
 fn days_between_iso(from: &str, to: &str) -> i64 {
@@ -1448,6 +2013,20 @@ fn date_to_ordinal(year: i32, month: u32, day: u32) -> i64 {
     let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     era * 146097 + doe - 719468
+}
+
+fn ordinal_to_date(days_since_epoch: i64) -> (i32, u32, u32) {
+    let z = days_since_epoch + 719468;
+    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
+    let doe = z - era * 146097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let year = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let month_part = (5 * doy + 2) / 153;
+    let day = doy - (153 * month_part + 2) / 5 + 1;
+    let month = month_part + if month_part < 10 { 3 } else { -9 };
+    let year = year + if month <= 2 { 1 } else { 0 };
+    (year as i32, month as u32, day as u32)
 }
 
 fn pad_visual(value: &str, width: usize) -> String {
@@ -1556,10 +2135,10 @@ fn default_config_path() -> PathBuf {
 }
 
 fn load_config(path: &Path) -> Result<Config> {
-    let content = fs::read_to_string(path)
-        .with_context(|| format!("could not read config {}", path.display()))?;
-    let mut config: Config = toml::from_str(&content)
-        .with_context(|| format!("could not parse config {}", path.display()))?;
+    let content =
+        fs::read_to_string(path).with_context(|| format!("无法读取配置 {}", path.display()))?;
+    let mut config: Config =
+        toml::from_str(&content).with_context(|| format!("无法解析配置 {}", path.display()))?;
     if config.servers.is_empty() {
         config.servers = sample_config().servers;
     }
@@ -1573,12 +2152,22 @@ fn ensure_sample_config(path: &Path) -> Result<()> {
 
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
-            .with_context(|| format!("could not create config directory {}", parent.display()))?;
+            .with_context(|| format!("无法创建配置目录 {}", parent.display()))?;
     }
 
     let content = toml::to_string_pretty(&sample_config())?;
-    fs::write(path, content)
-        .with_context(|| format!("could not create sample config {}", path.display()))?;
+    fs::write(path, content).with_context(|| format!("无法创建示例配置 {}", path.display()))?;
+    Ok(())
+}
+
+fn save_config(path: &Path, config: &Config) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("无法创建配置目录 {}", parent.display()))?;
+    }
+
+    let content = toml::to_string_pretty(config)?;
+    fs::write(path, content).with_context(|| format!("无法写入配置 {}", path.display()))?;
     Ok(())
 }
 
@@ -1598,7 +2187,7 @@ fn sample_config() -> Config {
                 private_key_path: None,
                 domain: None,
                 expires_at: Some("2028-09-02".to_string()),
-                note: Some("Example RDP host. Replace it with your real server.".to_string()),
+                note: Some("示例 RDP 主机，请替换为你的真实服务器。".to_string()),
                 rdp_file: None,
                 tags: vec!["windows".to_string(), "rdp".to_string()],
             },
@@ -1614,7 +2203,7 @@ fn sample_config() -> Config {
                 private_key_path: None,
                 domain: None,
                 expires_at: None,
-                note: Some("Example SSH host.".to_string()),
+                note: Some("示例 SSH 主机。".to_string()),
                 rdp_file: None,
                 tags: vec!["linux".to_string(), "ssh".to_string()],
             },
