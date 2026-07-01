@@ -1,0 +1,21 @@
+[package]
+name = "remhub"
+version = "0.1.0"
+edition = "2024"
+description = "A TUI launcher for RDP and SSH servers"
+readme = "README.md"
+license = "MIT"
+keywords = ["tui", "rdp", "ssh", "remote", "mstsc"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+anyhow = "1.0"
+crossterm = "0.29"
+ratatui = "0.29"
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+unicode-width = "0.2"
+
+# Avoid incremental-cache hard-link warnings on network / non-Unix file systems.
+[profile.dev]
+incremental = false

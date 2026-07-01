@@ -1,0 +1,32 @@
+/target/
+
+# Local server config (passwords, keys, real hosts)
+servers.toml
+*.local.toml
+
+# Keys and credential-bearing files
+*.pem
+*.key
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+*.ppk
+
+# RDP files may contain saved credentials
+*.rdp
+
+# Debug symbols
+*.pdb
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

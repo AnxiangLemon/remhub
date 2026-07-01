@@ -1,0 +1,39 @@
+[defaults]
+rdp_command = "mstsc"
+ssh_command = "ssh"
+rdp_extra_args = []
+ssh_extra_args = []
+# Open SSH in a new terminal window so you can connect to multiple hosts at once.
+ssh_new_window = true
+
+[[servers]]
+name = "Windows Jumpbox"
+host = "10.0.0.10"
+group = "production"
+protocol = "rdp"
+port = 3389
+user = "administrator"
+password = "your-rdp-password"
+expires_at = "2028-09-02"
+note = "Windows remote desktop example."
+tags = ["windows", "rdp", "jumpbox"]
+
+[[servers]]
+name = "Linux Bastion"
+host = "10.0.0.20"
+group = "production"
+protocol = "ssh"
+port = 22
+user = "ops"
+private_key_path = "C:\\Users\\you\\.ssh\\id_ed25519"
+note = "SSH bastion example."
+tags = ["linux", "ssh", "bastion"]
+
+[[servers]]
+name = "Custom RDP File"
+host = "rdp-file-placeholder"
+group = "office"
+protocol = "rdp"
+rdp_file = "C:\\Users\\you\\Documents\\office.rdp"
+note = "When rdp_file is set, remhub launches that .rdp file directly."
+tags = ["rdp-file"]
