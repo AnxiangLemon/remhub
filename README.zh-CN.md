@@ -2,9 +2,9 @@
 
 **RDP 与 SSH 服务器的终端界面启动器。**
 
-[English](README.md)
+[English](README.md) | 中文
 
-`remhub`（Remote Hub）是一个用 Rust 编写的远程服务器启动器。通过 TUI 管理 `servers.toml` 中的服务器列表，一键连接 Windows 远程桌面（RDP）或 SSH 会话。
+`remhub`（Remote Hub）管理 `servers.toml` 中的服务器列表，通过快捷键驱动的 TUI 一键连接 Windows 远程桌面（RDP）或 SSH 会话。
 
 ## 界面预览
 
@@ -15,8 +15,10 @@
 - **RDP** — 自动写入 Windows 凭据（`cmdkey`），调用 `mstsc`；也支持直接打开 `.rdp` 文件
 - **SSH** — 调用系统 `ssh`；Windows 上默认在新终端窗口打开，可同时连接多台主机
 - **TUI** — 搜索、分组筛选、详情面板、最近连接置顶
-- **快捷键** — 数字键 1–9 快速连接，一键复制连接命令到剪贴板
+- **快捷键** — 数字键 1–9 快速连接；一键复制连接命令到剪贴板
+- **新增、编辑与删除** — 在 TUI 内交互式新增或编辑服务器（保存到 `servers.toml`）；删除时需确认
 - **配置** — 纯 TOML 配置，首次运行自动生成示例文件
+- **双语界面** — 默认英文，在 `[defaults]` 中设置 `lang = "zh"` 可切换中文 UI
 
 ## 环境要求
 
@@ -58,6 +60,7 @@ cargo run
 
 ```toml
 [defaults]
+lang = "zh"                    # "en"（默认）或 "zh" 切换中文界面
 rdp_command = "mstsc"
 ssh_command = "ssh"
 ssh_new_window = true          # Windows 默认：在新终端标签页中打开 SSH
@@ -111,8 +114,11 @@ tags = ["linux", "ssh"]
 | `Enter` | 连接选中的服务器 |
 | `1`–`9` | 快速连接当前可见列表中的第 1–9 台 |
 | `c` | 复制连接命令到剪贴板 |
-| `g` | 循环切换分组筛选 |
-| `/` | 搜索（名称、主机、分组、标签等） |
+| `a` | 新增服务器（交互式表单，保存到 `servers.toml`） |
+| `i` | 编辑选中的服务器（交互式表单，保存到 `servers.toml`） |
+| `d` / `Delete` | 删除选中的服务器（需确认） |
+| `g` | 循环切换分组筛选（全部 → 分组1 → …） |
+| `/` | 按名称、主机、分组、协议或标签搜索 |
 | `↑`/`↓` 或 `j`/`k` | 移动选中项 |
 | `PageUp`/`PageDown` | 跳转 10 行 |
 | `Home`/`End` | 跳到首/末台服务器 |

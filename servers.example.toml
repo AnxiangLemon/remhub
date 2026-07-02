@@ -1,9 +1,14 @@
+# remhub example configuration.
+# Copy to servers.toml and replace the placeholder values with your real servers.
+#
+# Language: set to "zh" for Chinese UI (default: "en")
 [defaults]
+# lang = "en"
 rdp_command = "mstsc"
 ssh_command = "ssh"
 rdp_extra_args = []
 ssh_extra_args = []
-# 在新终端窗口中打开 SSH，便于同时连接多台主机。
+# Open SSH in a new terminal window so you can connect to multiple hosts at once.
 ssh_new_window = true
 
 [[servers]]
@@ -15,7 +20,7 @@ port = 3389
 user = "administrator"
 password = "your-rdp-password"
 expires_at = "2028-09-02"
-note = "Windows 远程桌面示例。"
+note = "Example RDP host. Replace it with your real server."
 tags = ["windows", "rdp", "jumpbox"]
 
 [[servers]]
@@ -26,7 +31,7 @@ protocol = "ssh"
 port = 22
 user = "ops"
 private_key_path = "C:\\Users\\you\\.ssh\\id_ed25519"
-note = "SSH 堡垒机示例。"
+note = "Example SSH host."
 tags = ["linux", "ssh", "bastion"]
 
 [[servers]]
@@ -35,5 +40,5 @@ host = "rdp-file-placeholder"
 group = "office"
 protocol = "rdp"
 rdp_file = "C:\\Users\\you\\Documents\\office.rdp"
-note = "设置 rdp_file 后，remhub 会直接启动该 .rdp 文件。"
+note = "When rdp_file is set, remhub launches that .rdp file directly."
 tags = ["rdp-file"]

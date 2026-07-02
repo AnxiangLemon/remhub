@@ -2,9 +2,9 @@
 
 **A terminal UI launcher for RDP and SSH servers.**
 
-[中文](README.zh-CN.md)
+`remhub` (Remote Hub) manages your server list in `servers.toml` and lets you connect to Windows Remote Desktop (RDP) or SSH sessions with one keystroke — all from a fast keyboard-driven TUI.
 
-`remhub` (Remote Hub) is a Rust-based remote server launcher. Manage your server list in `servers.toml` through a TUI and connect to Windows Remote Desktop (RDP) or SSH sessions with one keystroke.
+English | [中文](README.zh-CN.md)
 
 ## Screenshot
 
@@ -12,15 +12,17 @@
 
 ## Features
 
-- **RDP** — Automatically stores Windows credentials via `cmdkey` and launches `mstsc`; also supports opening `.rdp` files directly
-- **SSH** — Invokes the system `ssh` client; on Windows, opens in a new terminal window by default so you can connect to multiple hosts at once
-- **TUI** — Search, group filtering, details panel, and recently used servers pinned to the top
-- **Shortcuts** — Number keys 1–9 for quick connect; copy connection commands to the clipboard
+- **RDP** — Launches `mstsc` with `/v:host:port`; stores credentials via `cmdkey`; also opens `.rdp` files directly
+- **SSH** — Invokes the system `ssh` client; on Windows, opens in a new terminal window by default so you can manage multiple sessions
+- **TUI** — Search, group filtering, details panel, recently used servers pinned to the top
+- **Shortcuts** — Number keys 1–9 for quick connect; copy commands to the clipboard
+- **Add, Edit & Delete** — Add or edit servers interactively inside the TUI (saved to `servers.toml`); delete with a confirmation step
 - **Config** — Plain TOML configuration; an example file is generated on first run
+- **Bilingual** — English (default) or Chinese UI via `lang = "zh"` in `[defaults]`
 
 ## Requirements
 
-- [Rust](https://rustup.rs/) (stable)
+- [Rust](https://rustup.rs/) (stable, edition 2024)
 - **RDP**: Windows + `mstsc`
 - **SSH**: OpenSSH client (`ssh`); on Windows, [Windows Terminal](https://aka.ms/terminal) (`wt`) is recommended
 
@@ -48,7 +50,7 @@ cargo run
 
 | Method | Example |
 | --- | --- |
-| Default | `servers.toml` next to `remhub.exe`; falls back to `./servers.toml` in the current directory when developing with `cargo run` |
+| Default | `servers.toml` next to `remhub.exe`; falls back to `./servers.toml` when developing with `cargo run` |
 | Argument | `remhub.exe D:\configs\servers.toml` |
 | Environment | `$env:REMHUB_CONFIG="D:\configs\servers.toml"` |
 
@@ -58,9 +60,10 @@ See [`servers.example.toml`](servers.example.toml) for a full example.
 
 ```toml
 [defaults]
+lang = "en"                     # "en" (default) or "zh" for Chinese UI
 rdp_command = "mstsc"
 ssh_command = "ssh"
-ssh_new_window = true          # Windows default: open SSH in a new terminal tab
+ssh_new_window = true           # Windows default: open SSH in a new terminal tab
 ssh_extra_args = ["-o", "ServerAliveInterval=30"]
 
 [[servers]]
@@ -90,7 +93,7 @@ tags = ["linux", "ssh"]
 | Field | Description |
 | --- | --- |
 | `name` | Display name in the TUI |
-| `host` | Hostname or IP |
+| `host` | Hostname or IP address |
 | `protocol` | `rdp` or `ssh` |
 | `port` | Optional port (RDP: 3389, SSH: 22) |
 | `user` | Username (`user@host` for SSH; used with `password` for RDP) |
@@ -98,9 +101,9 @@ tags = ["linux", "ssh"]
 | `private_key_path` | SSH private key file (`ssh -i`) |
 | `private_key` | Inline SSH private key (written to a temp file at runtime) |
 | `domain` | Windows domain for RDP (`domain\user`) |
-| `expires_at` | Expiry date `YYYY-MM-DD`, shown in the list |
+| `expires_at` | Expiry date `YYYY-MM-DD`, shown in the server list |
 | `group` | Group label for filtering and display |
-| `note` | Free-text note in the details panel |
+| `note` | Free-text note shown in the details panel |
 | `tags` | Tags for search |
 | `rdp_file` | Launch a `.rdp` file instead of `/v:host` |
 
@@ -111,8 +114,11 @@ tags = ["linux", "ssh"]
 | `Enter` | Connect to selected server |
 | `1`–`9` | Quick connect to visible servers 1–9 |
 | `c` | Copy connection command to clipboard |
-| `g` | Cycle group filter |
-| `/` | Search (name, host, group, tags, …) |
+| `a` | Add a new server (interactive form, saved to `servers.toml`) |
+| `i` | Edit selected server (interactive form, saved to `servers.toml`) |
+| `d` / `Delete` | Delete selected server (with confirmation) |
+| `g` | Cycle group filter (all → group1 → …) |
+| `/` | Search by name, host, group, protocol, or tags |
 | `↑`/`↓` or `j`/`k` | Move selection |
 | `PageUp`/`PageDown` | Jump 10 rows |
 | `Home`/`End` | First / last server |
